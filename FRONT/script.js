@@ -1,94 +1,170 @@
-const form = document.getElementById("form");
-const nameField = document.getElementById("nameField");
-const nameInput = document.getElementById("name");
-const email = document.getElementById("email");
-const password = document.getElementById("password");
-const toggle = document.getElementById("toggle");
-const submit = document.getElementById("submit");
-const status = document.getElementById("status");
-const title = document.getElementById("title");
-const subtitle = document.getElementById("subtitle");
-const switchText = document.getElementById("switchText");
-const switchBtn = document.getElementById("switchBtn");
 
-let mode = "signin"; // "signin" or "signup"
+const express = require('express');
+const app = express();
+const dotenv = require('dotenv');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const path = require('path');
 
-function setMode(next) {
-  mode = next;
-  const signup = mode === "signup";
-  nameField.hidden = !signup;
-  title.textContent = signup ? "Create your account" : "Welcome back";
-  subtitle.textContent = signup ? "It only takes a minute." : "Sign in to continue.";
-  submit.textContent = signup ? "Create account" : "Sign in";
-  switchText.textContent = signup ? "Already have an account?" : "No account yet?";
-  switchBtn.textContent = signup ? "Sign in" : "Create one";
-  password.autocomplete = signup ? "new-password" : "current-password";
-  clearErrors();
-  status.textContent = "";
-  status.className = "status";
-}
+dotenv.config();
 
-function setError(input, message) {
-  const field = input.closest(".field");
-  field.classList.add("invalid");
-  field.querySelector(".error").textContent = message;
-}
+const FRONT_PATH = path.join(__dirname, '../front');
 
-function clearErrors() {
-  document.querySelectorAll(".field").forEach((f) => f.classList.remove("invalid"));
-}
+// Middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(FRONT_PATH));
 
-function validate() {
-  clearErrors();
-  let valid = true;
-
-  if (mode === "signup" && nameInput.value.trim().length < 2) {
-    setError(nameInput, "Enter your name.");
-    valid = false;
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) {
-    setError(email, "Enter a valid email address.");
-    valid = false;
-  }
-  if (password.value.length < 8) {
-    setError(password, "Use at least 8 characters.");
-    valid = false;
-  }
-  return valid;
-}
-
-toggle.addEventListener("click", () => {
-  const hidden = password.type === "password";
-  password.type = hidden ? "text" : "password";
-  toggle.textContent = hidden ? "Hide" : "Show";
-  toggle.setAttribute("aria-label", hidden ? "Hide password" : "Show password");
+// Modèle User
+const userSchema = new mongoose.Schema({
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true,
+        lowercase: true
+    },
+    password: {
+        type: String,
+        required: true
+    }
+}, {
+    timestamps: true
 });
 
-switchBtn.addEventListener("click", () => setMode(mode === "signin" ? "signup" : "signin"));
+const User = mongoose.model('User', userSchema);
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  status.textContent = "";
-  status.className = "status";
-  if (!validate()) return;
-
-  submit.disabled = true;
-  submit.textContent = "Please wait...";
-
-  // Replace this block with a real request to your server, for example:
-  // const res = await fetch("/api/login", {
-  //   method: "POST",
-  //   headers: { "Content-Type": "application/json" },
-  //   body: JSON.stringify({ email: email.value, password: password.value }),
-  // });
-  await new Promise((r) => setTimeout(r, 800));
-
-  status.textContent = mode === "signup" ? "Account created." : "Signed in.";
-  status.className = "status ok";
-  submit.disabled = false;
-  submit.textContent = mode === "signup" ? "Create account" : "Sign in";
+// Page d'accueil
+app.get('/', (req, res) => {
+    res.sendFile(path.join(FRONT_PATH, 'index.html'));
 });
 
-[nameInput, email, password].forEach((input) =>
-  input.addEventListener("input", () => input.closest(".field").classList.remove("invalid"))
-);
+// Connexion MongoDB
+async function connectDB() {
+    try {
+        await mongoose.connect(process.env.MONGO_URI);
+        console.log('MongoDB connected successfully');
+    } catch (error) {
+        console.error('MongoDB connection error:', error.message);
+        process.exit(1);
+    }
+}
+
+// Route de test
+app.get('/api/test', (req, res) => {
+    res.json({
+        message: 'Backend Express fonctionne correctement'
+    });
+});
+
+// Inscription
+app.post('/api/register', async (req, res) => {
+    try {
+        let { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                message: 'Email et mot de passe obligatoires'
+            });
+        }
+
+        email = email.trim().toLowerCase();
+
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({
+                message: 'Adresse email invalide'
+            });
+        }
+
+        if (password.length < 8) {
+            return res.status(400).json({
+                message: 'Le mot de passe doit contenir au moins 8 caractères'
+            });
+        }
+
+        const existingUser = await User.findOne({ email });
+
+        if (existingUser) {
+            return res.status(409).json({
+                message: 'Cette adresse email est déjà utilisée'
+            });
+        }
+
+
+        const user = new User({
+            email,
+            password
+        });
+
+        await user.save();
+
+        return res.status(201).json({
+            message: 'Utilisateur créé avec succès',
+            user: {
+                id: user._id,
+                email: user.email,
+                createdAt: user.createdAt
+            }
+        });
+
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({
+                message: 'Cette adresse email est déjà utilisée'
+            });
+        }
+
+        console.error('Register error:', error.message);
+
+        return res.status(500).json({
+            message: 'Erreur interne du serveur'
+        });
+    }
+});
+
+// Connexion
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+       
+
+        const user = await User.findOne({
+            email: email.trim().toLowerCase()
+        });
+
+        if (!user || !(await bcrypt.compare(password, user.password))) {
+            return res.status(401).json({
+                message: 'Email ou mot de passe incorrect'
+            });
+        }
+
+        return res.status(200).json({
+            message: 'Identifiants vérifiés avec succès',
+            user: {
+                id: user._id,
+                email: user.email
+            }
+        });
+
+    } catch (error) {
+        console.error('Login error:', error.message);
+
+        return res.status(500).json({
+            message: 'Erreur interne du serveur'
+        });
+    }
+});
+
+// Démarrage du serveur
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+    await connectDB();
+
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
+}
+
+startServer();
